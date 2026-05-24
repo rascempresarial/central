@@ -795,163 +795,173 @@ footer{position:relative;z-index:10;padding:14px 40px;border-top:1px solid var(-
 <!-- FOOTER -->
 <footer>
   <div class="fsig">CENTRAL // <strong>ALEXSANDER CAVALCANTE</strong> // PROTOCOLO FANTASMA // RASC</div>
-  <div class="fup" id="uptime-display">UPTIME: 00:00:00</div>
+  <span id="sync-status" style="font-size:9px;color:var(--g4);letter-spacing:2px;margin-right:16px;">● SYNC</span><div class="fup" id="uptime-display">UPTIME: 00:00:00</div>
 </footer>
 
+
+<!-- LOADING OVERLAY -->
+<div id="loading-overlay" style="display:none;position:fixed;inset:0;background:var(--bg-void);z-index:9999;flex-direction:column;align-items:center;justify-content:center;gap:20px;">
+  <div style="font-family:'Bebas Neue',sans-serif;font-size:48px;letter-spacing:10px;color:var(--g5);">CENTRAL</div>
+  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:4px;color:var(--t1);" id="loading-msg">CONECTANDO AO BANCO DE DADOS...</div>
+  <div style="width:200px;height:2px;background:var(--bg-card);border:1px solid var(--bd0);overflow:hidden;">
+    <div style="height:100%;background:var(--g4);animation:loading-bar 1.5s ease-in-out infinite;"></div>
+  </div>
+</div>
+<style>
+@keyframes loading-bar{0%{width:0;margin-left:0;}50%{width:100%;margin-left:0;}100%{width:0;margin-left:100%;}  }
+</style>
 <script>
-const SK='retomada_v2';
-function ld(){try{return JSON.parse(localStorage.getItem(SK))||{};}catch{return {};}}
-function sd_raw(d){localStorage.setItem(SK,JSON.stringify(d));}
+// ═══════════════════════════════════════════════
+// CENTRAL — SUPABASE DATABASE
+// ═══════════════════════════════════════════════
+const SB_URL = 'https://odmopyluudtndpaicobp.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9kbW9weWx1dWR0bmRwYWljb2JwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4MDU2NDUsImV4cCI6MjA5MzM4MTY0NX0.mchvrT3rGwnwHWt0xsmm-IvYShxAbJbs-4bnfwjauZ4';
+const SB_H = {'Content-Type':'application/json','apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY,'Prefer':'return=representation'};
+
+let STATE = { tasks:{}, checkins:{}, receitas:[], contas:[], logs:[], config:{} };
+
+function setSyncStatus(ok){
+  const el=document.getElementById('sync-status');
+  if(!el)return;
+  el.textContent=ok?'● SYNC':'◌ SYNC...';
+  el.style.color=ok?'var(--g4)':'var(--amber)';
+}
+
+async function sbGet(t,p=''){const r=await fetch(`${SB_URL}/rest/v1/${t}?${p}`,{headers:SB_H});if(!r.ok)throw new Error(await r.text());return r.json();}
+async function sbPost(t,b){const r=await fetch(`${SB_URL}/rest/v1/${t}`,{method:'POST',headers:SB_H,body:JSON.stringify(b)});if(!r.ok)throw new Error(await r.text());return r.json();}
+async function sbPatch(t,id,b){const r=await fetch(`${SB_URL}/rest/v1/${t}?id=eq.${id}`,{method:'PATCH',headers:SB_H,body:JSON.stringify(b)});if(!r.ok)throw new Error(await r.text());return r.json();}
+async function sbDelete(t,id){const r=await fetch(`${SB_URL}/rest/v1/${t}?id=eq.${id}`,{method:'DELETE',headers:SB_H});if(!r.ok)throw new Error(await r.text());}
+async function sbUpsert(t,b,oc='id'){const r=await fetch(`${SB_URL}/rest/v1/${t}?on_conflict=${oc}`,{method:'POST',headers:{...SB_H,'Prefer':'resolution=merge-duplicates,return=representation'},body:JSON.stringify(b)});if(!r.ok)throw new Error(await r.text());return r.json();}
+
+async function loadAll(){
+  setSyncStatus(false);
+  try{
+    const ldMsg=document.getElementById('loading-msg');
+    if(ldMsg)ldMsg.textContent='CARREGANDO DADOS...';
+    const [cfgR,tasks,checkins,receitas,contas,logs]=await Promise.all([
+      sbGet('central_config','id=eq.main&select=data'),
+      sbGet('central_tasks','order=created_at.asc'),
+      sbGet('central_checkins','select=area,day_key,done'),
+      sbGet('central_receitas','order=created_at.asc'),
+      sbGet('central_contas','order=created_at.asc'),
+      sbGet('central_logs','order=created_at.desc&limit=300')
+    ]);
+    STATE.config=cfgR[0]?.data||{};
+    STATE.tasks={};
+    tasks.forEach(t=>{if(!STATE.tasks[t.area])STATE.tasks[t.area]=[];STATE.tasks[t.area].push(t);});
+    STATE.checkins={};
+    checkins.forEach(c=>{if(!STATE.checkins[c.area])STATE.checkins[c.area]={};STATE.checkins[c.area][c.day_key]=c.done;});
+    STATE.receitas=receitas;STATE.contas=contas;STATE.logs=logs;
+    setSyncStatus(true);return true;
+  }catch(e){console.error('loadAll',e);setSyncStatus(false);return false;}
+}
+
+async function saveConfig(key,value){
+  STATE.config[key]=value;
+  try{await sbUpsert('central_config',{id:'main',data:STATE.config,updated_at:new Date().toISOString()});}
+  catch(e){console.error('saveConfig',e);}
+}
 
 function saveData(){
-  const d=ld();
-  const fields={
-    'daily-note':'daily_note','fe-notes':'fe_notes','est-notes':'est_notes',
-    'fin-notes':'fin_notes','apoio-notes':'apoio_notes',
-    'peso-atual':'peso_atual','peso-meta':'peso_meta','meta-mensal':'meta_mensal'
-  };
-  for(const [id,key] of Object.entries(fields)){const el=document.getElementById(id);if(el)d[key]=el.value;}
-  sd_raw(d);updateStats();updateFin();updateTicker();
+  const fields={'daily-note':'daily_note','fe-notes':'fe_notes','est-notes':'est_notes','fin-notes':'fin_notes','apoio-notes':'apoio_notes','peso-atual':'peso_atual','peso-meta':'peso_meta','meta-mensal':'meta_mensal'};
+  for(const[id,key]of Object.entries(fields)){const el=document.getElementById(id);if(el)STATE.config[key]=el.value;}
+  sbUpsert('central_config',{id:'main',data:STATE.config,updated_at:new Date().toISOString()})
+    .then(()=>setSyncStatus(true)).catch(e=>{console.error(e);setSyncStatus(false);});
+  updateStats();updateFin();updateTicker();
 }
 
 function restoreData(){
-  const d=ld();
-  const fields={
-    'daily-note':'daily_note','fe-notes':'fe_notes','est-notes':'est_notes',
-    'fin-notes':'fin_notes','apoio-notes':'apoio_notes',
-    'peso-atual':'peso_atual','peso-meta':'peso_meta','meta-mensal':'meta_mensal'
-  };
-  for(const [id,key] of Object.entries(fields)){const el=document.getElementById(id);if(el&&d[key])el.value=d[key];}
+  const cfg=STATE.config;
+  const fields={'daily-note':'daily_note','fe-notes':'fe_notes','est-notes':'est_notes','fin-notes':'fin_notes','apoio-notes':'apoio_notes','peso-atual':'peso_atual','peso-meta':'peso_meta','meta-mensal':'meta_mensal'};
+  for(const[id,key]of Object.entries(fields)){const el=document.getElementById(id);if(el&&cfg[key]!=null)el.value=cfg[key];}
+  if(STATE.config.theme){
+    document.documentElement.setAttribute('data-theme',STATE.config.theme);
+    const btn=document.getElementById('theme-label');
+    if(btn)btn.textContent=STATE.config.theme==='light'?'TEMA ESCURO':'TEMA CLARO';
+  }
 }
 
 // TASKS
-function loadTasks(){return ld().tasks||{};}
-function saveTasks(t){const d=ld();d.tasks=t;sd_raw(d);}
-
 function renderTasks(area){
-  const tasks=loadTasks();
-  const list=tasks[area]||[];
+  const list=STATE.tasks[area]||[];
   const c=document.getElementById(area+'-tasks');
   if(!c)return;
   c.innerHTML='';
-  list.forEach((t,i)=>{
-    const b=document.createElement('div');
-    b.className='mb';
+  list.forEach(t=>{
+    const b=document.createElement('div');b.className='mb';
     const p=t.priority||'media';
-    b.innerHTML=`<div class="mr"><input type="checkbox" class="mc" ${t.done?'checked':''} onchange="toggleTask('${area}',${i},this)"><div class="mt">${t.text}</div><button onclick="removeTask('${area}',${i})" style="background:none;border:none;color:var(--t0);cursor:pointer;font-size:15px;padding:0 3px;line-height:1;">&times;</button></div><div class="mm"><span class="pt-tag ${p}">${p.toUpperCase()}</span><span class="md">${t.date||''}</span></div>`;
+    b.innerHTML=`<div class="mr"><input type="checkbox" class="mc" ${t.done?'checked':''} onchange="toggleTask(${t.id},this,'${area}')"><div class="mt">${t.text}</div><button onclick="removeTask(${t.id},'${area}')" style="background:none;border:none;color:var(--t0);cursor:pointer;font-size:15px;padding:0 3px;line-height:1;">&times;</button></div><div class="mm"><span class="pt-tag ${p}">${p.toUpperCase()}</span><span class="md">${t.date||''}</span></div>`;
     c.appendChild(b);
   });
   updateStats();updateCounts();
 }
 
-function addTask(area,fp){
+async function addTask(area,fp){
   const inp=document.getElementById(area+'-input');
   if(!inp||!inp.value.trim())return;
   const sel=document.getElementById(area+'-p');
   const prio=fp||(sel?sel.value:'media');
-  const tasks=loadTasks();
-  if(!tasks[area])tasks[area]=[];
-  tasks[area].unshift({text:inp.value.trim().toUpperCase(),done:false,priority:prio,date:new Date().toLocaleDateString('pt-BR')});
-  saveTasks(tasks);inp.value='';
-  renderTasks(area);
-  addLog('green',`NOVA MISSAO [${area.toUpperCase()}]: ${tasks[area][0].text}`);
+  const text=inp.value.trim().toUpperCase();
+  inp.value='';setSyncStatus(false);
+  try{
+    const rows=await sbPost('central_tasks',{area,text,done:false,priority:prio,date:new Date().toLocaleDateString('pt-BR')});
+    if(!STATE.tasks[area])STATE.tasks[area]=[];
+    STATE.tasks[area].push(rows[0]);
+    renderTasks(area);addLog('green',`NOVA MISSAO [${area.toUpperCase()}]: ${text}`);setSyncStatus(true);
+  }catch(e){console.error(e);setSyncStatus(false);}
 }
 
-function toggleTask(area,i,cb){
-  const t=loadTasks();t[area][i].done=cb.checked;saveTasks(t);renderTasks(area);
-  if(cb.checked)addLog('green',`CONCLUIDO [${area.toUpperCase()}]: ${t[area][i].text}`);
+async function toggleTask(id,cb,area){
+  const done=cb.checked;
+  const t=(STATE.tasks[area]||[]).find(x=>x.id===id);
+  if(t)t.done=done;setSyncStatus(false);
+  try{
+    await sbPatch('central_tasks',id,{done,updated_at:new Date().toISOString()});
+    if(done&&t)addLog('green',`CONCLUIDO [${area.toUpperCase()}]: ${t.text}`);
+    setSyncStatus(true);
+  }catch(e){cb.checked=!done;console.error(e);setSyncStatus(false);}
+  updateStats();
 }
 
-function removeTask(area,i){const t=loadTasks();t[area].splice(i,1);saveTasks(t);renderTasks(area);}
+async function removeTask(id,area){
+  setSyncStatus(false);
+  try{
+    await sbDelete('central_tasks',id);
+    STATE.tasks[area]=(STATE.tasks[area]||[]).filter(x=>x.id!==id);
+    renderTasks(area);setSyncStatus(true);
+  }catch(e){console.error(e);setSyncStatus(false);}
+}
 
-// DEFAULT TASKS
-function seedTasks(){
-  const tasks=loadTasks();
+async function seedTasks(){
   const defaults={
-    'fe':[
-      {text:'DEVOCIONAL 06:00 — BIBLIA + ORACAO 20MIN',done:false,priority:'alta',date:'PADRAO'},
-      {text:'LEITURA DE UM SALMO OU PROVÉRBIO',done:false,priority:'media',date:'PADRAO'},
-      {text:'GRATIDAO — ESCREVER 3 COISAS',done:false,priority:'media',date:'PADRAO'},
-    ],
-    'corpo':[
-      {text:'ACORDAR 05:30 SEM SNOOZE',done:false,priority:'alta',date:'PADRAO'},
-      {text:'EXECUTAR TREINO DO DIA COMPLETO',done:false,priority:'alta',date:'PADRAO'},
-      {text:'BEBER 3.5L DE AGUA',done:false,priority:'alta',date:'PADRAO'},
-      {text:'CUMPRIR TODAS AS 7 REFEICOES',done:false,priority:'alta',date:'PADRAO'},
-      {text:'HIIT POS-TREINO 20MIN',done:false,priority:'media',date:'PADRAO'},
-    ],
-    'alim':[
-      {text:'ZERO ACUCAR REFINADO NO DIA',done:false,priority:'alta',date:'PADRAO'},
-      {text:'ZERO FARINHA BRANCA',done:false,priority:'alta',date:'PADRAO'},
-      {text:'ZERO ALCOOL',done:false,priority:'alta',date:'PADRAO'},
-      {text:'SUPLEMENTOS: CREATINA 5G + WHEY POS-TREINO',done:false,priority:'media',date:'PADRAO'},
-      {text:'VITAMINA D + OMEGA 3 COM ALMOCO',done:false,priority:'baixa',date:'PADRAO'},
-    ],
-    'sono':[
-      {text:'CELULAR FORA DO QUARTO EM CARREGAMENTO NA SALA',done:false,priority:'alta',date:'PADRAO'},
-      {text:'TELA DESLIGADA EM 22:00',done:false,priority:'alta',date:'PADRAO'},
-      {text:'DORMIR EM 22:30 — 1H ANTES DO ALARME',done:false,priority:'alta',date:'PADRAO'},
-      {text:'QUARTO ESCURO E FRESCO',done:false,priority:'media',date:'PADRAO'},
-      {text:'SEM CAFEINA APOS 17:00',done:false,priority:'media',date:'PADRAO'},
-    ],
-    'c1':[
-      {text:'REVISAR CAMPANHAS META ADS — CESAR IMPORTS',done:false,priority:'alta',date:'PADRAO'},
-      {text:'ANALISAR METRICAS DA SEMANA: CPM, CPC, ROAS',done:false,priority:'alta',date:'PADRAO'},
-      {text:'CRIAR NOVO CRIATIVO PARA IPHONE',done:false,priority:'media',date:'PADRAO'},
-      {text:'RESPONDER DMS E COMENTARIOS DO INSTAGRAM',done:false,priority:'media',date:'PADRAO'},
-      {text:'RELATORIO MENSAL DE RESULTADOS',done:false,priority:'baixa',date:'PADRAO'},
-    ],
-    'c2':[
-      {text:'SUBIR CAMPANHAS DE LEADS — K+ VEICULOS',done:false,priority:'alta',date:'PADRAO'},
-      {text:'REVISAR ANUNCIOS ATIVOS E PAUSAR INEFICIENTES',done:false,priority:'alta',date:'PADRAO'},
-      {text:'CRIAR CONTEUDO INSTAGRAM — ESTOQUE DA SEMANA',done:false,priority:'media',date:'PADRAO'},
-      {text:'ANALISAR CUSTO POR LEAD E OTIMIZAR PUBLICO',done:false,priority:'alta',date:'PADRAO'},
-    ],
-    'c3':[
-      {text:'ESTRATEGIA INSTAGRAM MAIO — VITA OVOS',done:false,priority:'alta',date:'PADRAO'},
-      {text:'GRAVAR REELS DO MES — ROTEIROS APROVADOS',done:false,priority:'media',date:'PADRAO'},
-      {text:'PROSPECTAR CLIENTES B2B VIA WHATSAPP',done:false,priority:'media',date:'PADRAO'},
-      {text:'ATUALIZAR GOOGLE MINHA EMPRESA',done:false,priority:'baixa',date:'PADRAO'},
-    ],
-    'c4':[
-      {text:'SUPORTE AO INSTAGRAM — VILLA PARIS',done:false,priority:'media',date:'PADRAO'},
-      {text:'VERIFICAR DEMANDAS PENDENTES',done:false,priority:'baixa',date:'PADRAO'},
-    ],
-    'trafego':[
-      {text:'META ADS: ESTUDO DE PUBLICO AVANCADO (LOOKALIKE)',done:false,priority:'alta',date:'PADRAO'},
-      {text:'CAMPANHA ABO VS CBO — TESTES E ANALISE',done:false,priority:'alta',date:'PADRAO'},
-      {text:'MODULO: COPYWRITING PARA ANUNCIOS (AIDA/PAS)',done:false,priority:'media',date:'PADRAO'},
-      {text:'GOOGLE ADS: INTRODUCAO A CAMPANHAS DE PESQUISA',done:false,priority:'media',date:'PADRAO'},
-    ],
-    'ia':[
-      {text:'CLAUDE: APROFUNDAR PROMPT ENGINEERING',done:false,priority:'alta',date:'PADRAO'},
-      {text:'N8N + EVOLUTION API: AGENTE WHATSAPP RASC',done:false,priority:'alta',date:'PADRAO'},
-      {text:'MIDJOURNEY: CRIACAO DE CRIATIVOS PARA ADS',done:false,priority:'media',date:'PADRAO'},
-      {text:'CURSOR / V0: PROTOTIPO SAAS SAUDE',done:false,priority:'media',date:'PADRAO'},
-    ],
-    'livros':[
-      {text:'BIBLIA — LEITURA DIARIA',done:false,priority:'alta',date:'PADRAO'},
-      {text:'DOTCOM SECRETS — RUSSELL BRUNSON (CAP 4)',done:false,priority:'media',date:'PADRAO'},
-      {text:'BIBLIA DO MARKETING DIGITAL — JON LOOMER',done:false,priority:'media',date:'PADRAO'},
-    ],
-    'fin':[
-      {text:'DEFINIR META MENSAL DE RECEITA',done:false,priority:'alta',date:'PADRAO'},
-      {text:'RESERVA DE EMERGENCIA — 3 MESES DE CUSTO',done:false,priority:'alta',date:'PADRAO'},
-      {text:'ELIMINAR GASTOS DESNECESSARIOS',done:false,priority:'media',date:'PADRAO'},
-      {text:'REINVESTIR 30% DA RECEITA NO NEGOCIO',done:false,priority:'media',date:'PADRAO'},
-    ],
+    'fe':[{text:'DEVOCIONAL 06:00 — BIBLIA + ORACAO 20MIN',priority:'alta'},{text:'LEITURA DE UM SALMO OU PROVERBIO',priority:'media'},{text:'GRATIDAO — ESCREVER 3 COISAS',priority:'media'}],
+    'corpo':[{text:'ACORDAR 05:30 SEM SNOOZE',priority:'alta'},{text:'EXECUTAR TREINO DO DIA COMPLETO',priority:'alta'},{text:'BEBER 3.5L DE AGUA',priority:'alta'},{text:'CUMPRIR TODAS AS 7 REFEICOES',priority:'alta'},{text:'HIIT POS-TREINO 20MIN',priority:'media'}],
+    'alim':[{text:'ZERO ACUCAR REFINADO NO DIA',priority:'alta'},{text:'ZERO FARINHA BRANCA',priority:'alta'},{text:'ZERO ALCOOL',priority:'alta'},{text:'SUPLEMENTOS: CREATINA 5G + WHEY POS-TREINO',priority:'media'},{text:'VITAMINA D + OMEGA 3 COM ALMOCO',priority:'baixa'}],
+    'sono':[{text:'CELULAR FORA DO QUARTO — CARREGANDO NA SALA',priority:'alta'},{text:'TELA DESLIGADA EM 22:00',priority:'alta'},{text:'DORMIR EM 22:30 — 1H ANTES DO ALARME',priority:'alta'},{text:'QUARTO ESCURO E FRESCO',priority:'media'},{text:'SEM CAFEINA APOS 17:00',priority:'media'}],
+    'c1':[{text:'REVISAR CAMPANHAS META ADS — CESAR IMPORTS',priority:'alta'},{text:'ANALISAR METRICAS: CPM, CPC, ROAS',priority:'alta'},{text:'CRIAR NOVO CRIATIVO PARA IPHONE',priority:'media'},{text:'RESPONDER DMS E COMENTARIOS DO INSTAGRAM',priority:'media'},{text:'RELATORIO MENSAL DE RESULTADOS',priority:'baixa'}],
+    'c2':[{text:'SUBIR CAMPANHAS DE LEADS — K+ VEICULOS',priority:'alta'},{text:'REVISAR ANUNCIOS E PAUSAR INEFICIENTES',priority:'alta'},{text:'CRIAR CONTEUDO INSTAGRAM — ESTOQUE DA SEMANA',priority:'media'},{text:'ANALISAR CUSTO POR LEAD E OTIMIZAR PUBLICO',priority:'alta'}],
+    'c3':[{text:'ESTRATEGIA INSTAGRAM — VITA OVOS',priority:'alta'},{text:'GRAVAR REELS DO MES — ROTEIROS APROVADOS',priority:'media'},{text:'PROSPECTAR CLIENTES B2B VIA WHATSAPP',priority:'media'},{text:'ATUALIZAR GOOGLE MINHA EMPRESA',priority:'baixa'}],
+    'c4':[{text:'SUPORTE AO INSTAGRAM — VILLA PARIS',priority:'media'},{text:'VERIFICAR DEMANDAS PENDENTES',priority:'baixa'}],
+    'trafego':[{text:'META ADS: ESTUDO DE PUBLICO AVANCADO (LOOKALIKE)',priority:'alta'},{text:'CAMPANHA ABO VS CBO — TESTES E ANALISE',priority:'alta'},{text:'MODULO: COPYWRITING PARA ANUNCIOS (AIDA/PAS)',priority:'media'},{text:'GOOGLE ADS: CAMPANHAS DE PESQUISA',priority:'media'}],
+    'ia':[{text:'CLAUDE: APROFUNDAR PROMPT ENGINEERING',priority:'alta'},{text:'N8N + EVOLUTION API: AGENTE WHATSAPP RASC',priority:'alta'},{text:'MIDJOURNEY: CRIACAO DE CRIATIVOS PARA ADS',priority:'media'},{text:'CURSOR / V0: PROTOTIPO SAAS SAUDE',priority:'media'}],
+    'livros':[{text:'BIBLIA — LEITURA DIARIA',priority:'alta'},{text:'DOTCOM SECRETS — RUSSELL BRUNSON (CAP 4)',priority:'media'},{text:'BIBLIA DO MARKETING DIGITAL — JON LOOMER',priority:'media'}],
+    'fin':[{text:'DEFINIR META MENSAL DE RECEITA',priority:'alta'},{text:'RESERVA DE EMERGENCIA — 3 MESES DE CUSTO',priority:'alta'},{text:'ELIMINAR GASTOS DESNECESSARIOS',priority:'media'},{text:'REINVESTIR 30% DA RECEITA NO NEGOCIO',priority:'media'}],
   };
   let seeded=false;
-  for(const[a,list]of Object.entries(defaults)){if(!tasks[a]||tasks[a].length===0){tasks[a]=list;seeded=true;}}
-  if(seeded){saveTasks(tasks);addLog('gray','DADOS PADRAO CARREGADOS — MISSOES INICIAIS DEFINIDAS');}
+  for(const[area,list]of Object.entries(defaults)){
+    if(!STATE.tasks[area]||STATE.tasks[area].length===0){
+      const rows=await sbPost('central_tasks',list.map(t=>({area,text:t.text,done:false,priority:t.priority,date:'PADRAO'})));
+      STATE.tasks[area]=Array.isArray(rows)?rows:[];seeded=true;
+    }
+  }
+  if(seeded)addLog('gray','DADOS PADRAO CARREGADOS — MISSOES INICIAIS DEFINIDAS');
 }
 
-// WEEK TRACKER
+// WEEK CHECKINS
 const DAYS=['DOM','SEG','TER','QUA','QUI','SEX','SAB'];
 function renderWeek(area){
   const c=document.getElementById('week-'+area);if(!c)return;
-  const d=ld();const wd=d['week_'+area]||{};
-  const today=new Date();c.innerHTML='';
+  const wd=STATE.checkins[area]||{};const today=new Date();c.innerHTML='';
   for(let i=0;i<7;i++){
     const dt=new Date(today);dt.setDate(today.getDate()-today.getDay()+i);
     const k=dt.toISOString().slice(0,10);
@@ -962,19 +972,74 @@ function renderWeek(area){
     el.onclick=()=>toggleDay(area,k);c.appendChild(el);
   }
 }
-function toggleDay(area,k){
-  const d=ld();const wk='week_'+area;
-  if(!d[wk])d[wk]={};d[wk][k]=!d[wk][k];sd_raw(d);
-  renderWeek(area);updateStats();
-  if(d[wk][k])addLog('green',`CHECK-IN ${area.toUpperCase()} — ${k}`);
+async function toggleDay(area,k){
+  if(!STATE.checkins[area])STATE.checkins[area]={};
+  const cur=STATE.checkins[area][k];const nv=!cur;
+  STATE.checkins[area][k]=nv;renderWeek(area);updateStats();setSyncStatus(false);
+  try{
+    await sbUpsert('central_checkins',{area,day_key:k,done:nv},'area,day_key');
+    if(nv)addLog('green',`CHECK-IN ${area.toUpperCase()} — ${k}`);setSyncStatus(true);
+  }catch(e){STATE.checkins[area][k]=cur;renderWeek(area);console.error(e);setSyncStatus(false);}
+}
+
+// RECEITAS
+async function addReceita(){
+  const nome=document.getElementById('rec-nome')?.value.trim();const val=document.getElementById('rec-valor')?.value;
+  if(!nome||!val)return;
+  document.getElementById('rec-nome').value='';document.getElementById('rec-valor').value='';
+  setSyncStatus(false);
+  try{
+    const rows=await sbPost('central_receitas',{nome:nome.toUpperCase(),valor:parseFloat(val)});
+    STATE.receitas.push(rows[0]);renderReceitas();updateFin();
+    addLog('green',`RECEITA: ${nome.toUpperCase()} R$ ${val}`);setSyncStatus(true);
+  }catch(e){console.error(e);setSyncStatus(false);}
+}
+async function removeReceita(id){
+  setSyncStatus(false);
+  try{await sbDelete('central_receitas',id);STATE.receitas=STATE.receitas.filter(x=>x.id!==id);renderReceitas();updateFin();setSyncStatus(true);}
+  catch(e){console.error(e);setSyncStatus(false);}
+}
+function renderReceitas(){
+  const list=document.getElementById('receitas-list');if(!list)return;
+  if(STATE.receitas.length===0){list.innerHTML='<div style="font-size:9px;color:var(--t0);padding:8px 0 12px;letter-spacing:1px;">NENHUMA RECEITA CADASTRADA</div>';return;}
+  const fmt=v=>'R$ '+parseFloat(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  list.innerHTML=STATE.receitas.map(x=>`<div class="rec-item"><div class="fi-nome">${x.nome}</div><div class="fi-valor">${fmt(x.valor)}</div><button onclick="removeReceita(${x.id})" style="background:none;border:none;color:var(--t0);cursor:pointer;font-size:14px;padding:0 3px;">&times;</button></div>`).join('');
+}
+
+// CONTAS
+async function addConta(){
+  const nome=document.getElementById('conta-nome')?.value.trim();const val=document.getElementById('conta-valor')?.value;const cat=document.getElementById('conta-cat')?.value||'fixa';
+  if(!nome||!val)return;
+  document.getElementById('conta-nome').value='';document.getElementById('conta-valor').value='';
+  setSyncStatus(false);
+  try{
+    const rows=await sbPost('central_contas',{nome:nome.toUpperCase(),valor:parseFloat(val),cat,pago:false});
+    STATE.contas.push(rows[0]);renderContas();updateFin();
+    addLog('amber',`CONTA: ${nome.toUpperCase()} R$ ${val} [${cat.toUpperCase()}]`);setSyncStatus(true);
+  }catch(e){console.error(e);setSyncStatus(false);}
+}
+async function toggleContaPago(id,cb){
+  const c=STATE.contas.find(x=>x.id===id);if(c)c.pago=cb.checked;setSyncStatus(false);
+  try{await sbPatch('central_contas',id,{pago:cb.checked,updated_at:new Date().toISOString()});renderContas();updateFin();setSyncStatus(true);}
+  catch(e){if(c)c.pago=!cb.checked;console.error(e);setSyncStatus(false);}
+}
+async function removeConta(id){
+  setSyncStatus(false);
+  try{await sbDelete('central_contas',id);STATE.contas=STATE.contas.filter(x=>x.id!==id);renderContas();updateFin();setSyncStatus(true);}
+  catch(e){console.error(e);setSyncStatus(false);}
+}
+function renderContas(){
+  const list=document.getElementById('contas-list');if(!list)return;
+  if(STATE.contas.length===0){list.innerHTML='<div style="font-size:9px;color:var(--t0);padding:8px 0 12px;letter-spacing:1px;">NENHUMA CONTA CADASTRADA</div>';return;}
+  const fmt=v=>'R$ '+parseFloat(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+  list.innerHTML=STATE.contas.map(x=>`<div class="conta-item"><input type="checkbox" class="conta-pago" ${x.pago?'checked':''} onchange="toggleContaPago(${x.id},this)"><div class="fi-nome" style="${x.pago?'color:var(--t0);text-decoration:line-through;':''}">${x.nome}</div><span class="fi-cat ${x.cat}">${x.cat.toUpperCase()}</span><div class="fi-valor red">${fmt(x.valor)}</div><button onclick="removeConta(${x.id})" style="background:none;border:none;color:var(--t0);cursor:pointer;font-size:14px;padding:0 3px;">&times;</button></div>`).join('');
 }
 
 // STATS
 function updateStats(){
-  const tasks=loadTasks();
   const all=['fe','corpo','alim','sono','c1','c2','c3','c4','trafego','ia','livros','fin'];
   let tot=0,done=0;
-  all.forEach(a=>{const l=tasks[a]||[];tot+=l.length;done+=l.filter(t=>t.done).length;});
+  all.forEach(a=>{const l=STATE.tasks[a]||[];tot+=l.length;done+=l.filter(t=>t.done).length;});
   document.getElementById('tasks-today').textContent=done+'/'+tot;
   const pct=tot>0?Math.round((done/tot)*100):0;
   document.getElementById('nivel-geral').textContent=pct+'%';
@@ -982,267 +1047,125 @@ function updateStats(){
   const keys2={fe:'fe',corpo:'corpo',trabalho:'trab',estudos:'est',financas:'fin'};
   const miniMap={};
   for(const[k,subs]of Object.entries(map)){
-    let t=0,d=0;subs.forEach(a=>{const l=tasks[a]||[];t+=l.length;d+=l.filter(x=>x.done).length;});
-    const p=t>0?Math.round((d/t)*100):0;
-    const k2=keys2[k];
+    let t=0,d=0;subs.forEach(a=>{const l=STATE.tasks[a]||[];t+=l.length;d+=l.filter(x=>x.done).length;});
+    const p=t>0?Math.round((d/t)*100):0;const k2=keys2[k];
     const bar=document.getElementById('prog-'+k2);const pEl=document.getElementById('pct-'+k2);
-    if(bar)bar.style.width=p+'%';if(pEl)pEl.textContent=p+'%';
-    miniMap[k2]=p;
+    if(bar)bar.style.width=p+'%';if(pEl)pEl.textContent=p+'%';miniMap[k2]=p;
   }
-  updateMiniApoio(miniMap);
-  updateStreaks();updateCounts();
+  updateMiniApoio(miniMap);updateStreaks();updateCounts();
 }
-
 function updateStreaks(){
-  const d=ld();
   ['fe','corpo'].forEach(area=>{
-    const wd=d['week_'+area]||{};let streak=0;const today=new Date();
+    const wd=STATE.checkins[area]||{};let streak=0;const today=new Date();
     for(let i=0;i<365;i++){const dt=new Date(today);dt.setDate(today.getDate()-i);const k=dt.toISOString().slice(0,10);if(wd[k])streak++;else if(i>0)break;}
     const el=document.getElementById(area+'-streak');if(el)el.textContent=streak;
     const sid=area==='fe'?'streak-fe':'streak-treino';const sel=document.getElementById(sid);if(sel)sel.textContent=streak;
   });
 }
-
 function updateCounts(){
-  const tasks=loadTasks();
-  ['c1','c2','c3','c4'].forEach(a=>{
-    const el=document.getElementById(a+'-count');
-    if(el)el.textContent=(tasks[a]||[]).filter(t=>!t.done).length;
-  });
+  ['c1','c2','c3','c4'].forEach(a=>{const el=document.getElementById(a+'-count');if(el)el.textContent=(STATE.tasks[a]||[]).filter(t=>!t.done).length;});
 }
 
+// FINANCAS
 function updateFin(){
-  const d=ld();
-  const receitas=d.receitas||[];
-  const contas=d.contas||[];
   const meta=parseFloat(document.getElementById('meta-mensal')?.value)||0;
-
-  const totalRec=receitas.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
-  const totalCont=contas.reduce((s,c)=>s+(parseFloat(c.valor)||0),0);
-  const saldo=totalRec-totalCont;
-  const pct=meta>0?Math.min(100,Math.round((totalRec/meta)*100)):0;
-  const contAbertas=contas.filter(c=>!c.pago).length;
-
-  // stats bar
-  const fmt=v=>'R$ '+Math.round(v).toLocaleString('pt-BR');
-  const se=id=>document.getElementById(id);
+  const totalRec=STATE.receitas.reduce((s,r)=>s+(parseFloat(r.valor)||0),0);
+  const totalCont=STATE.contas.reduce((s,c)=>s+(parseFloat(c.valor)||0),0);
+  const saldo=totalRec-totalCont;const pct=meta>0?Math.min(100,Math.round((totalRec/meta)*100)):0;
+  const contAbertas=STATE.contas.filter(c=>!c.pago).length;
+  const fmt=v=>'R$ '+Math.round(v).toLocaleString('pt-BR');const se=id=>document.getElementById(id);
   if(se('fin-receita-total'))se('fin-receita-total').textContent=fmt(totalRec);
   if(se('fin-contas-total'))se('fin-contas-total').textContent=fmt(totalCont);
-  const sEl=se('fin-saldo');
-  if(sEl){sEl.textContent=fmt(saldo);sEl.style.color=saldo>=0?'var(--g5)':'var(--red)';}
+  const sEl=se('fin-saldo');if(sEl){sEl.textContent=fmt(saldo);sEl.style.color=saldo>=0?'var(--g5)':'var(--red)';}
   if(se('fin-meta-display'))se('fin-meta-display').textContent=fmt(meta);
   if(se('fin-meta-pct-sub'))se('fin-meta-pct-sub').textContent=pct+'% atingido';
   if(se('contas-abertas'))se('contas-abertas').textContent=contAbertas+' abertas';
-
-  // barra meta
   const bar=se('fin-bar');const lbl=se('fin-pct-lbl');
   if(bar)bar.style.width=pct+'%';if(lbl)lbl.textContent=pct+'%';
-  if(se('fin-meta-display'))se('fin-meta-display').textContent=fmt(meta);
-
-  // fluxo
   if(se('flow-rec'))se('flow-rec').textContent=fmt(totalRec);
   if(se('flow-cont'))se('flow-cont').textContent=fmt(totalCont);
-  const livreEl=se('flow-livre');
-  if(livreEl){livreEl.textContent=fmt(saldo);livreEl.style.color=saldo>=0?'var(--g5)':'var(--red)';}
-  if(totalRec>0){
-    const pCont=Math.min(100,Math.round((totalCont/totalRec)*100));
-    const pLivre=Math.max(0,100-pCont);
-    if(se('flow-bar-cont'))se('flow-bar-cont').style.width=pCont+'%';
-    if(se('flow-bar-livre'))se('flow-bar-livre').style.width=pLivre+'%';
-  }
-
-  // categoria breakdown
+  const livreEl=se('flow-livre');if(livreEl){livreEl.textContent=fmt(saldo);livreEl.style.color=saldo>=0?'var(--g5)':'var(--red)';}
+  if(totalRec>0){const pC=Math.min(100,Math.round((totalCont/totalRec)*100));if(se('flow-bar-cont'))se('flow-bar-cont').style.width=pC+'%';if(se('flow-bar-livre'))se('flow-bar-livre').style.width=Math.max(0,100-pC)+'%';}
   const cats={fixa:0,variavel:0,divida:0,investimento:0};
-  contas.forEach(c=>{ if(cats[c.cat]!==undefined)cats[c.cat]+=(parseFloat(c.valor)||0); });
-  const catNames={fixa:'FIXAS',variavel:'VARIAVEIS',divida:'DIVIDAS',investimento:'INVESTIMENTO'};
-  const catColors={fixa:'var(--red)',variavel:'var(--amber)',divida:'#e24040',investimento:'var(--g4)'};
+  STATE.contas.forEach(c=>{if(cats[c.cat]!==undefined)cats[c.cat]+=(parseFloat(c.valor)||0);});
+  const catN={fixa:'FIXAS',variavel:'VARIAVEIS',divida:'DIVIDAS',investimento:'INVESTIMENTO'};
+  const catC={fixa:'var(--red)',variavel:'var(--amber)',divida:'#e24040',investimento:'var(--g4)'};
   const bd=se('cat-breakdown');
-  if(bd&&totalCont>0){
-    bd.innerHTML=Object.entries(cats).filter(([,v])=>v>0).map(([k,v])=>{
-      const pct2=Math.round((v/totalCont)*100);
-      return `<div class="cat-bar-item"><div class="cat-bar-label">${catNames[k]}</div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:${pct2}%;background:${catColors[k]};"></div></div><div class="cat-bar-val">${fmt(v)} (${pct2}%)</div></div>`;
-    }).join('');
-  } else if(bd){bd.innerHTML='<div style="font-size:9px;color:var(--t0);padding:8px 0;letter-spacing:1px;">NENHUMA CONTA CADASTRADA</div>';}
-
-  // ticker mini fin
-  const pctTk=meta>0?pct+'%':'VAZIO';
-  ['tk-fin','tk-fin2'].forEach(id=>{const e=se(id);if(e)e.textContent=pctTk;});
-
-  saveData();
-}
-
-// RECEITAS
-function loadReceitas(){return ld().receitas||[];}
-function saveReceitas(r){const d=ld();d.receitas=r;sd_raw(d);}
-function addReceita(){
-  const nome=document.getElementById('rec-nome')?.value.trim();
-  const val=document.getElementById('rec-valor')?.value;
-  if(!nome||!val)return;
-  const r=loadReceitas();
-  r.push({id:Date.now(),nome:nome.toUpperCase(),valor:parseFloat(val)});
-  saveReceitas(r);
-  document.getElementById('rec-nome').value='';
-  document.getElementById('rec-valor').value='';
-  renderReceitas();updateFin();
-  addLog('green',`RECEITA ADICIONADA: ${nome.toUpperCase()} R$ ${val}`);
-}
-function removeReceita(id){
-  const r=loadReceitas().filter(x=>x.id!==id);saveReceitas(r);renderReceitas();updateFin();
-}
-function renderReceitas(){
-  const list=document.getElementById('receitas-list');if(!list)return;
-  const r=loadReceitas();
-  if(r.length===0){list.innerHTML='<div style="font-size:9px;color:var(--t0);padding:8px 0 12px;letter-spacing:1px;">NENHUMA RECEITA CADASTRADA</div>';return;}
-  const fmt=v=>'R$ '+parseFloat(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
-  list.innerHTML=r.map(x=>`<div class="rec-item"><div class="fi-nome">${x.nome}</div><div class="fi-valor">${fmt(x.valor)}</div><button onclick="removeReceita(${x.id})" style="background:none;border:none;color:var(--t0);cursor:pointer;font-size:14px;padding:0 3px;">&times;</button></div>`).join('');
-}
-
-// CONTAS
-function loadContas(){return ld().contas||[];}
-function saveContas(c){const d=ld();d.contas=c;sd_raw(d);}
-function addConta(){
-  const nome=document.getElementById('conta-nome')?.value.trim();
-  const val=document.getElementById('conta-valor')?.value;
-  const cat=document.getElementById('conta-cat')?.value||'fixa';
-  if(!nome||!val)return;
-  const c=loadContas();
-  c.push({id:Date.now(),nome:nome.toUpperCase(),valor:parseFloat(val),cat,pago:false});
-  saveContas(c);
-  document.getElementById('conta-nome').value='';
-  document.getElementById('conta-valor').value='';
-  renderContas();updateFin();
-  addLog('amber',`CONTA ADICIONADA: ${nome.toUpperCase()} R$ ${val} [${cat.toUpperCase()}]`);
-}
-function toggleContaPago(id,cb){
-  const c=loadContas();const idx=c.findIndex(x=>x.id===id);
-  if(idx>=0){c[idx].pago=cb.checked;saveContas(c);renderContas();updateFin();}
-}
-function removeConta(id){
-  const c=loadContas().filter(x=>x.id!==id);saveContas(c);renderContas();updateFin();
-}
-function renderContas(){
-  const list=document.getElementById('contas-list');if(!list)return;
-  const c=loadContas();
-  if(c.length===0){list.innerHTML='<div style="font-size:9px;color:var(--t0);padding:8px 0 12px;letter-spacing:1px;">NENHUMA CONTA CADASTRADA</div>';return;}
-  const fmt=v=>'R$ '+parseFloat(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
-  list.innerHTML=c.map(x=>`<div class="conta-item"><input type="checkbox" class="conta-pago" ${x.pago?'checked':''} onchange="toggleContaPago(${x.id},this)"><div class="fi-nome" style="${x.pago?'color:var(--t0);text-decoration:line-through;':''}">${x.nome}</div><span class="fi-cat ${x.cat}">${x.cat.toUpperCase()}</span><div class="fi-valor red">${fmt(x.valor)}</div><button onclick="removeConta(${x.id})" style="background:none;border:none;color:var(--t0);cursor:pointer;font-size:14px;padding:0 3px;">&times;</button></div>`).join('');
-}
-
-// EXPORT / IMPORT
-function exportData(){
-  const d=ld();
-  const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;a.download='central-backup-'+new Date().toISOString().slice(0,10)+'.json';
-  a.click();URL.revokeObjectURL(url);
-  addLog('green','BACKUP EXPORTADO COM SUCESSO');
-}
-function importData(input){
-  const file=input.files[0];if(!file)return;
-  const reader=new FileReader();
-  reader.onload=e=>{
-    try{
-      const d=JSON.parse(e.target.result);
-      localStorage.setItem(SK,JSON.stringify(d));
-      location.reload();
-    }catch{alert('ARQUIVO INVALIDO');}
-  };
-  reader.readAsText(file);
+  if(bd&&totalCont>0){bd.innerHTML=Object.entries(cats).filter(([,v])=>v>0).map(([k,v])=>{const p2=Math.round((v/totalCont)*100);return `<div class="cat-bar-item"><div class="cat-bar-label">${catN[k]}</div><div class="cat-bar-track"><div class="cat-bar-fill" style="width:${p2}%;background:${catC[k]};"></div></div><div class="cat-bar-val">${fmt(v)} (${p2}%)</div></div>`;}).join('');}
+  else if(bd){bd.innerHTML='<div style="font-size:9px;color:var(--t0);padding:8px 0;letter-spacing:1px;">NENHUMA CONTA CADASTRADA</div>';}
+  ['tk-fin','tk-fin2'].forEach(id=>{const e=se(id);if(e)e.textContent=meta>0?pct+'%':'VAZIO';});
 }
 
 // 90 DIAS
 function updateApoio(){
-  const d=ld();
-  if(!d.start_date){const today=new Date().toISOString().slice(0,10);d.start_date=today;sd_raw(d);}
-  const diff=Math.min(90,Math.floor((Date.now()-new Date(d.start_date).getTime())/86400000)+1);
-  const pct=Math.round((diff/90)*100);
-  const dayStr=String(diff).padStart(3,'0');
-
+  const sd=STATE.config.start_date||new Date().toISOString().slice(0,10);
+  if(!STATE.config.start_date){STATE.config.start_date=sd;saveConfig('start_date',sd);}
+  const diff=Math.min(90,Math.floor((Date.now()-new Date(sd).getTime())/86400000)+1);
+  const pct=Math.round((diff/90)*100);const dayStr=String(diff).padStart(3,'0');
   document.getElementById('day-counter').textContent=dayStr;
   document.getElementById('apoio-day').textContent=dayStr;
-
-  const fill=document.getElementById('apoio-fill');
-  const cursor=document.getElementById('apoio-cursor');
-  const lbl=document.getElementById('apoio-pct-label');
-  const fase=document.getElementById('fase-label');
-  if(fill)fill.style.width=pct+'%';
-  if(cursor)cursor.style.left=pct+'%';
-  if(lbl)lbl.textContent=pct+'%';
-  if(fase){
-    if(diff<=30)fase.textContent='FASE 1: FUNDACAO';
-    else if(diff<=60)fase.textContent='FASE 2: ACELERACAO';
-    else fase.textContent='FASE 3: CONSOLIDACAO';
-  }
+  const fill=document.getElementById('apoio-fill');const cursor=document.getElementById('apoio-cursor');
+  const lbl=document.getElementById('apoio-pct-label');const fase=document.getElementById('fase-label');
+  if(fill)fill.style.width=pct+'%';if(cursor)cursor.style.left=pct+'%';if(lbl)lbl.textContent=pct+'%';
+  if(fase)fase.textContent=diff<=30?'FASE 1: FUNDACAO':diff<=60?'FASE 2: ACELERACAO':'FASE 3: CONSOLIDACAO';
   ['tk-day','tk-day2'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=dayStr;});
 }
-
 function updateMiniApoio(map){
-  // map: {fe:pct, corpo:pct, trab:pct, est:pct, fin:pct}
-  const keys2={fe:'fe',corpo:'corpo',trab:'trab',est:'est',fin:'fin'};
-  for(const[k,p] of Object.entries(map)){
-    const bar=document.getElementById('mini-'+k);
-    const lbl=document.getElementById('mini-'+k+'-pct');
-    if(bar)bar.style.width=p+'%';
-    if(lbl)lbl.textContent=p+'%';
+  for(const[k,p]of Object.entries(map)){
+    const bar=document.getElementById('mini-'+k);const lbl=document.getElementById('mini-'+k+'-pct');
+    if(bar)bar.style.width=p+'%';if(lbl)lbl.textContent=p+'%';
   }
 }
 
 // LOG
-function addLog(type,msg){
-  const d=ld();if(!d.logs)d.logs=[];
+async function addLog(type,msg){
   const now=new Date();
-  d.logs.unshift({type,msg,time:now.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),date:now.toLocaleDateString('pt-BR')});
-  if(d.logs.length>500)d.logs=d.logs.slice(0,500);
-  sd_raw(d);renderLog();pushHdrLine(type,msg);
+  const entry={type,msg,time:now.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}),date:now.toLocaleDateString('pt-BR')};
+  STATE.logs.unshift(entry);if(STATE.logs.length>300)STATE.logs=STATE.logs.slice(0,300);
+  renderLog();pushHdrLine(type,msg);
+  try{await sbPost('central_logs',{type,msg});}catch(e){}
 }
-function addManualLog(){
+async function addManualLog(){
   const inp=document.getElementById('log-input');const t=document.getElementById('log-type');
   if(!inp||!inp.value.trim())return;
-  addLog(t?t.value:'green',inp.value.trim().toUpperCase());inp.value='';
+  await addLog(t?t.value:'green',inp.value.trim().toUpperCase());inp.value='';
 }
-function clearLog(){
+async function clearLog(){
   if(!confirm('PURGAR TODO O LOG?'))return;
-  const d=ld();d.logs=[];sd_raw(d);renderLog();
+  STATE.logs=[];renderLog();
+  try{await fetch(`${SB_URL}/rest/v1/central_logs`,{method:'DELETE',headers:SB_H});}catch(e){}
 }
 function renderLog(){
   const feed=document.getElementById('log-feed');if(!feed)return;
-  const logs=ld().logs||[];
-  if(logs.length===0){feed.innerHTML='<div style="font-size:10px;color:var(--t0);padding:16px 0;letter-spacing:2px;">// NENHUMA ENTRADA — AGUARDANDO</div>';return;}
+  if(STATE.logs.length===0){feed.innerHTML='<div style="font-size:10px;color:var(--t0);padding:16px 0;letter-spacing:2px;">// NENHUMA ENTRADA — AGUARDANDO</div>';return;}
   const tl={green:'[OK]  ',amber:'[WARN]',red:'[CRIT]',gray:'[INFO]'};
   const tc={green:'ok',amber:'warn',red:'err',gray:'info'};
-  feed.innerHTML=logs.map(l=>`<div class="le"><span class="lets">${l.date} ${l.time}</span><span class="lety ${tc[l.type]||'info'}">${tl[l.type]||'[INFO]'}</span><span class="lemsg ${tc[l.type]||'info'}">${l.msg}</span></div>`).join('');
+  feed.innerHTML=STATE.logs.map(l=>{
+    const d=l.date||(l.created_at?new Date(l.created_at).toLocaleDateString('pt-BR'):'');
+    const t=l.time||(l.created_at?new Date(l.created_at).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}):'');
+    return `<div class="le"><span class="lets">${d} ${t}</span><span class="lety ${tc[l.type]||'info'}">${tl[l.type]||'[INFO]'}</span><span class="lemsg ${tc[l.type]||'info'}">${l.msg}</span></div>`;
+  }).join('');
   feed.scrollTop=0;
 }
 
-// HEADER TERMINAL
-const BOOT=[
-  {t:'gray',m:'iniciando sistema de comando...'},
-  {t:'green',m:'BOOT: modulos carregados'},
-  {t:'green',m:'AUTH: alexsander.cavalcante — ok'},
-  {t:'green',m:'SYNC: dados locais restaurados'},
-  {t:'green',m:'PILARES: 5 unidades ativas'},
-  {t:'amber',m:'ALERTA: financas requer atencao'},
-  {t:'gray',m:'SISTEMA: aguardando operador...'},
-];
+// TERMINAL HEADER
+const BOOT=[{t:'gray',m:'conectando ao supabase...'},{t:'green',m:'DATABASE: conexao estabelecida'},{t:'green',m:'AUTH: alexsander.cavalcante — ok'},{t:'green',m:'SYNC: dados remotos carregados'},{t:'green',m:'PILARES: 5 unidades ativas'},{t:'gray',m:'SISTEMA: aguardando operador...'}];
 function pushHdrLine(type,msg){
   const feed=document.getElementById('hdr-tf');if(!feed)return;
   const cls={green:'tok',amber:'twarn',red:'terr',gray:''}[type]||'';
   const now=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
   const line=document.createElement('div');line.className='tl fresh';
   line.innerHTML=`<span class="tts">${now}</span><span class="${cls}">${msg.substring(0,45)}${msg.length>45?'...':''}</span>`;
-  feed.appendChild(line);
-  const all=feed.querySelectorAll('.tl');if(all.length>6)all[0].remove();
+  feed.appendChild(line);const all=feed.querySelectorAll('.tl');if(all.length>6)all[0].remove();
   setTimeout(()=>line.classList.remove('fresh'),400);
 }
-function bootTerminal(){let i=0;function nx(){if(i>=BOOT.length)return;const l=BOOT[i++];pushHdrLine(l.t,l.m);setTimeout(nx,500+Math.random()*400);}setTimeout(nx,600);}
+function bootTerminal(){let i=0;function nx(){if(i>=BOOT.length)return;const l=BOOT[i++];pushHdrLine(l.t,l.m);setTimeout(nx,450+Math.random()*350);}setTimeout(nx,500);}
 
 // TICKER
 function updateTicker(){
-  const tasks=loadTasks();
   const map={fe:['fe'],corpo:['corpo','alim','sono'],trab:['c1','c2','c3','c4'],est:['trafego','ia','livros'],fin:['fin']};
   for(const[k,subs]of Object.entries(map)){
-    let t=0,d=0;subs.forEach(a=>{const l=tasks[a]||[];t+=l.length;d+=l.filter(x=>x.done).length;});
+    let t=0,d=0;subs.forEach(a=>{const l=STATE.tasks[a]||[];t+=l.length;d+=l.filter(x=>x.done).length;});
     const pct=t>0?Math.round((d/t)*100)+'%':'VAZIO';
     [`tk-${k}`,`tk-${k}2`].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=pct;});
   }
@@ -1271,42 +1194,42 @@ function swt(id,btn){
 
 // THEME
 function toggleTheme(){
-  const html=document.documentElement;
-  const isDark=html.getAttribute('data-theme')==='dark';
-  html.setAttribute('data-theme',isDark?'light':'dark');
-  const btn=document.getElementById('theme-label');
-  if(btn)btn.textContent=isDark?'TEMA ESCURO':'TEMA CLARO';
-  const d=ld();d.theme=isDark?'light':'dark';sd_raw(d);
+  const html=document.documentElement;const isDark=html.getAttribute('data-theme')==='dark';
+  const nv=isDark?'light':'dark';html.setAttribute('data-theme',nv);
+  const btn=document.getElementById('theme-label');if(btn)btn.textContent=isDark?'TEMA ESCURO':'TEMA CLARO';
+  STATE.config.theme=nv;saveConfig('theme',nv);
 }
 
 // QUOTES
-const quotes=[
-  '"A disciplina e a ponte entre metas e conquistas."',
-  '"Voce nao muda sua vida num dia, mas pode mudar a direcao num instante."',
-  '"Forca nao e ausencia de medo, e agir apesar dele."',
-  '"O que voce faz todos os dias importa mais do que o que voce faz de vez em quando."',
-  '"Guerreiro de Deus tem fe na batalha, nao depois dela."',
-  '"90 dias de consistencia valem mais do que anos de intencao."',
-];
-function setDailyQuote(){
-  const idx=new Date().getDate()%quotes.length;
-  const el=document.getElementById('daily-quote');if(el)el.textContent=quotes[idx];
+const quotes=['"A disciplina e a ponte entre metas e conquistas."','"Voce nao muda sua vida num dia, mas pode mudar a direcao num instante."','"Forca nao e ausencia de medo, e agir apesar dele."','"O que voce faz todos os dias importa mais do que o que voce faz de vez em quando."','"Guerreiro de Deus tem fe na batalha, nao depois dela."','"90 dias de consistencia valem mais do que anos de intencao."'];
+function setDailyQuote(){const idx=new Date().getDate()%quotes.length;const el=document.getElementById('daily-quote');if(el)el.textContent=quotes[idx];}
+
+// EXPORT
+function exportData(){
+  const blob=new Blob([JSON.stringify(STATE,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');
+  a.href=url;a.download='central-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();URL.revokeObjectURL(url);
+  addLog('green','BACKUP EXPORTADO COM SUCESSO');
 }
+function importData(){}
 
 // INIT
-window.addEventListener('load',()=>{
-  const d=ld();
-  if(d.theme){document.documentElement.setAttribute('data-theme',d.theme);const btn=document.getElementById('theme-label');if(btn)btn.textContent=d.theme==='light'?'TEMA ESCURO':'TEMA CLARO';}
-  restoreData();seedTasks();
+window.addEventListener('load',async()=>{
+  const ov=document.getElementById('loading-overlay');if(ov)ov.style.display='flex';
+  bootTerminal();setInterval(updateClock,1000);updateClock();
+  const ok=await loadAll();
+  if(ov)ov.style.display='none';
+  if(!ok){pushHdrLine('red','ERRO: falha ao conectar ao banco');}
+  restoreData();
+  const hasAny=Object.values(STATE.tasks).some(l=>l.length>0);
+  if(!hasAny)await seedTasks();
   const allAreas=['fe','corpo','alim','sono','c1','c2','c3','c4','trafego','ia','livros','fin'];
   allAreas.forEach(renderTasks);
   ['fe','corpo'].forEach(renderWeek);
   renderLog();renderReceitas();renderContas();
-  updateApoio();updateStats();updateTicker();updateFin();
-  bootTerminal();setDailyQuote();
-  setInterval(updateClock,1000);setInterval(updateTicker,15000);
-  updateClock();
-  addLog('gray','SISTEMA CENTRAL INICIALIZADO — PROTOCOLO FANTASMA ATIVO');
+  updateApoio();updateStats();updateTicker();updateFin();setDailyQuote();
+  setInterval(updateTicker,15000);
+  addLog('gray','CENTRAL ONLINE — SUPABASE CONECTADO — PROTOCOLO FANTASMA ATIVO');
 });
 </script>
 </body>
